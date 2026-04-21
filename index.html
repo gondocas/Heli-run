@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="HELI-RUN" />
+  <meta name="theme-color" content="#040608" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <title>HELI-RUN</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #040608; overflow: hidden;
+      touch-action: none;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-user-select: none; user-select: none;
+    }
+    canvas {
+      position: fixed; top: 0; left: 0;
+      width: 100%; height: 100%;
+      display: block; background: #040608;
+    }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+
+  const GW = 700, GH = 400;
+  const HELI_X = 110, HELI_W = 54, HELI_H = 28;
+  const GRAVITY = 0.25, THRUST = -0.48;
+  const PIPE_W = 38;
+  const PIPE_SPEED = 4.2, SCROLL_SPEED = 2.0;
+  const MIN_INTERVAL = 90, MAX_INTERVAL = 180;
+
+  const C = {
+    bgGrad1:"#0d1526", bgGrad2:"#060a12",
+    grid:"rgba(0,220,255,0.04)",
+    heli:"#00e5ff", pipe:"#00c853", pipeDark:"#007a2f",
+    textDim:"rgba(0,229,255,0.4)", score:"#ffd600", danger:"#ff1744",
+  };
+
+  function resize() { canvas.width = GW; canvas.height = GH; }
+  resize();
+
+  const st = {
+    heliY: GH/2, velY: 0,
+    pipes: [], frame: 0, score: 0,
+    bgOffset: 0,
+    alive: false, started: false, dead: false,
+    bestScore: 0,
+    thrust: [], boom: [],
+    rotorAngle: 0, flashTimer: 0,
+  };
+
+  function genPipe(x) {
+    const gap = 130 + Math.random() * 90;
+    const topH = 30 + Math.random() * (GH - gap - 30);
+    return { x, topH, gap, bottomY: topH + gap, scored: false };
+  }
+
+  function reset() {
+    Object.assign(st, {
+      heliY: GH/2, velY: 0,
+      pipes: [genPipe(GW+220), genPipe(GW+440)],
+      frame: 0, score: 0, alive: true, started: true, dead: false,
+      bgOffset: 0, thrust: [], boom: [], rotorAngle: 0, flashTimer: 0,
+      nextPipe: MIN_INTERVAL + Math.random() * (MAX_INTERVAL - MIN_INTERVAL),
+    });
+  }
+
+  const keys = { on: false };
+  function press()   { keys.on = true;  if (!st.started || st.dead) reset(); }
+  function release() { keys.on = false; }
+
+  window.addEventListener("keydown",      e => { if (e.code==="Space"){e.preventDefault();press();}});
+  window.addEventListener("keyup",        e => { if (e.code==="Space"){e.preventDefault();release();}});
+  document.addEventListener("touchstart", e => { e.preventDefault(); press();   }, {passive:false});
+  document.addEventListener("touchend",   e => { e.preventDefault(); release(); }, {passive:false});
+  document.addEventListener("touchcancel",e => { e.preventDefault(); release(); }, {passive:false});
+  document.addEventListener("mousedown",  press);
+  document.addEventListener("mouseup",    release);
+
+  function spawnThrust() {
+    st.thrust.push({
+      x: HELI_X-4, y: st.heliY+HELI_H/2+(Math.random()-.5)*10,
+      vx:-(1.5+Math.random()*2), vy:(Math.random()-.5)*1.2,
+      life:1, size:3+Math.random()*4,
+    });
+  }
+  function spawnBoom(x,y) {
+    for (let i=0;i<40;i++) {
+      const a=(Math.PI*2*i)/40+Math.random()*.5, s=1+Math.random()*5;
+      st.boom.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-2,life:1,
+        size:2+Math.random()*5,color:Math.random()>.5?"#ff6b35":"#ffd600"});
+    }
+  }
+
+  function drawBg() {
+    const g=ctx.createLinearGradient(0,0,0,GH);
+    g.addColorStop(0,C.bgGrad1); g.addColorStop(1,C.bgGrad2);
+    ctx.fillStyle=g; ctx.fillRect(0,0,GW,GH);
+    ctx.strokeStyle=C.grid; ctx.lineWidth=1;
+    const gs=50, ox=((st.bgOffset%gs)+gs)%gs;
+    for(let x=-gs+ox;x<GW+gs;x+=gs){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,GH);ctx.stroke();}
+    for(let y=0;y<GH;y+=gs){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(GW,y);ctx.stroke();}
+    ctx.strokeStyle="rgba(0,229,255,0.1)"; ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(0,GH*.5);ctx.lineTo(GW,GH*.5);ctx.stroke();
+  }
+
+  function drawHeli(x,y,r) {
+    ctx.save(); ctx.translate(x,y);
+    ctx.shadowColor=C.heli; ctx.shadowBlur=18;
+    ctx.fillStyle=C.heli;
+    ctx.beginPath(); ctx.roundRect(0,4,HELI_W-14,HELI_H-8,6); ctx.fill();
+    ctx.fillStyle="rgba(0,229,255,0.3)";
+    ctx.beginPath(); ctx.roundRect(HELI_W-22,4,16,HELI_H-8,[2,8,8,2]); ctx.fill();
+    ctx.fillStyle=C.heli;
+    ctx.beginPath(); ctx.moveTo(0,8);ctx.lineTo(-16,6);ctx.lineTo(-16,10);ctx.lineTo(0,12);ctx.fill();
+    ctx.save(); ctx.translate(-16,8);
+    ctx.strokeStyle="rgba(0,229,255,0.7)"; ctx.lineWidth=2;
+    for(let i=0;i<3;i++){const a=(i/3)*Math.PI*2+r*5;ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(Math.cos(a)*8,Math.sin(a)*8);ctx.stroke();}
+    ctx.restore();
+    ctx.save(); ctx.translate(HELI_W*.3,2);
+    ctx.strokeStyle=C.heli; ctx.lineWidth=2.5; ctx.shadowColor=C.heli; ctx.shadowBlur=8;
+    for(let i=0;i<2;i++){const a=(i/2)*Math.PI+r*12;ctx.beginPath();ctx.moveTo(Math.cos(a)*-22,Math.sin(a)*-22);ctx.lineTo(Math.cos(a)*22,Math.sin(a)*22);ctx.stroke();}
+    ctx.restore();
+    ctx.strokeStyle=C.heli; ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(6,HELI_H-4);ctx.lineTo(6,HELI_H);ctx.lineTo(HELI_W-10,HELI_H);ctx.lineTo(HELI_W-10,HELI_H-4);ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawPipes() {
+    st.pipes.forEach(({x,topH,bottomY})=>{
+      const tg=ctx.createLinearGradient(x,0,x+PIPE_W,0);
+      tg.addColorStop(0,C.pipeDark);tg.addColorStop(.4,C.pipe);tg.addColorStop(1,C.pipeDark);
+      ctx.fillStyle=tg; ctx.shadowColor=C.pipe; ctx.shadowBlur=12;
+      ctx.fillRect(x,0,PIPE_W,topH);
+      ctx.fillStyle="#00e676"; ctx.fillRect(x-4,topH-14,PIPE_W+8,14);
+      ctx.fillStyle=tg; ctx.fillRect(x,bottomY,PIPE_W,GH-bottomY);
+      ctx.fillStyle="#00e676"; ctx.fillRect(x-4,bottomY,PIPE_W+8,14);
+      ctx.shadowBlur=0;
+    });
+  }
+
+  function drawParticles(arr,boom) {
+    arr.forEach(p=>{
+      ctx.globalAlpha=p.life;
+      const col=boom?p.color:"#ff9100";
+      ctx.fillStyle=col; ctx.shadowColor=col; ctx.shadowBlur=6;
+      ctx.beginPath(); ctx.arc(p.x,p.y,p.size*p.life,0,Math.PI*2); ctx.fill();
+    });
+    ctx.globalAlpha=1; ctx.shadowBlur=0;
+  }
+
+  function drawHUD() {
+    ctx.font="bold 36px 'Courier New',monospace"; ctx.textAlign="center";
+    ctx.fillStyle=C.score; ctx.shadowColor=C.score; ctx.shadowBlur=20;
+    ctx.fillText(st.score,GW/2,44); ctx.shadowBlur=0;
+    ctx.font="12px 'Courier New',monospace"; ctx.fillStyle=C.textDim;
+    ctx.fillText("BEST: "+st.bestScore,GW/2,62);
+    if(st.alive){
+      ctx.textAlign="right"; ctx.font="11px 'Courier New',monospace"; ctx.fillStyle=C.textDim;
+      ctx.fillText("SPD "+(PIPE_SPEED+st.score*.12).toFixed(1),GW-14,GH-10);
+    }
+    ctx.textAlign="left";
+  }
+
+  function drawIdle() {
+    drawBg();
+    ctx.textAlign="center";
+    ctx.font="bold 52px 'Courier New',monospace";
+    ctx.fillStyle=C.heli; ctx.shadowColor=C.heli; ctx.shadowBlur=30;
+    ctx.fillText("HELI-RUN",GW/2,GH/2-50); ctx.shadowBlur=0;
+    ctx.font="17px 'Courier New',monospace"; ctx.fillStyle=C.textDim;
+    ctx.fillText("Toca para despegar",GW/2,GH/2+10);
+    ctx.font="12px 'Courier New',monospace"; ctx.fillStyle="rgba(0,229,255,0.2)";
+    ctx.fillText("mantén pulsado → sube  ·  suelta → cae",GW/2,GH/2+36);
+    drawHeli(HELI_X,GH/2-HELI_H/2,Date.now()/200);
+    ctx.textAlign="left";
+  }
+
+  function drawDead() {
+    ctx.fillStyle="rgba(0,0,0,0.55)"; ctx.fillRect(0,0,GW,GH);
+    ctx.textAlign="center";
+    ctx.font="bold 42px 'Courier New',monospace";
+    ctx.fillStyle=C.danger; ctx.shadowColor=C.danger; ctx.shadowBlur=25;
+    ctx.fillText("GAME OVER",GW/2,GH/2-50); ctx.shadowBlur=0;
+    ctx.font="24px 'Courier New',monospace"; ctx.fillStyle=C.score;
+    ctx.fillText("PUNTUACIÓN: "+st.score,GW/2,GH/2);
+    if(st.score>=st.bestScore&&st.score>0){
+      ctx.fillStyle="#69ff47"; ctx.shadowColor="#69ff47"; ctx.shadowBlur=15;
+      ctx.font="15px 'Courier New',monospace";
+      ctx.fillText("¡NUEVO RÉCORD!",GW/2,GH/2+32); ctx.shadowBlur=0;
+    } else {
+      ctx.fillStyle=C.textDim; ctx.font="14px 'Courier New',monospace";
+      ctx.fillText("RÉCORD: "+st.bestScore,GW/2,GH/2+32);
+    }
+    ctx.font="15px 'Courier New',monospace"; ctx.fillStyle="rgba(0,229,255,0.5)";
+    ctx.fillText("Toca para reintentar",GW/2,GH/2+68);
+    ctx.textAlign="left";
+  }
+
+  function drawPortrait() {
+    ctx.fillStyle="#040608"; ctx.fillRect(0,0,GW,GH);
+    ctx.save();
+    ctx.textAlign="center";
+    const cx=GW/2, cy=GH/2;
+    ctx.strokeStyle="rgba(0,229,255,0.5)"; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.roundRect(cx-20,cy-36,40,72,6); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx,cy+26,3,0,Math.PI*2); ctx.stroke();
+    ctx.strokeStyle="rgba(0,229,255,0.7)"; ctx.lineWidth=2.5;
+    ctx.beginPath();
+    ctx.arc(cx,cy-55,18,Math.PI*.8,Math.PI*2.2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx+17,cy-39); ctx.lineTo(cx+24,cy-50); ctx.lineTo(cx+11,cy-53); ctx.stroke();
+    ctx.font="bold 22px 'Courier New',monospace";
+    ctx.fillStyle="rgba(0,229,255,0.6)";
+    ctx.fillText("Gira el iPhone",cx,cy+58);
+    ctx.font="13px 'Courier New',monospace";
+    ctx.fillStyle="rgba(0,229,255,0.3)";
+    ctx.fillText("para jugar en horizontal",cx,cy+80);
+    ctx.restore();
+  }
+
+  function isPortrait() { return window.innerHeight > window.innerWidth; }
+
+  function loop() {
+    if(isPortrait()){ drawPortrait(); requestAnimationFrame(loop); return; }
+    if(!st.started){ drawIdle(); requestAnimationFrame(loop); return; }
+
+    if(st.alive){
+      st.frame++;
+      st.bgOffset-=SCROLL_SPEED;
+      st.rotorAngle+=0.12;
+
+      if(keys.on){ st.velY+=THRUST; if(st.frame%3===0) spawnThrust(); }
+      st.velY+=GRAVITY;
+      st.velY=Math.max(-4,Math.min(st.velY,10));
+      st.heliY+=st.velY;
+
+      const speed=PIPE_SPEED+st.score*.12;
+      st.nextPipe--;
+      if(st.nextPipe<=0){
+        st.pipes.push(genPipe(GW+20));
+        const range = Math.max(55, MIN_INTERVAL - st.score*2) +
+                      Math.random() * Math.max(20, (MAX_INTERVAL - MIN_INTERVAL) - st.score*2);
+        st.nextPipe = Math.max(55, range);
+      }
+      st.pipes=st.pipes.filter(p=>p.x>-PIPE_W-10);
+      st.pipes.forEach(p=>{ p.x-=speed; });
+      st.pipes.forEach(p=>{ if(!p.scored&&p.x+PIPE_W<HELI_X){p.scored=true;st.score++;} });
+
+      const hx=HELI_X+4,hy=st.heliY+4,hw=HELI_W-12,hh=HELI_H-8;
+      let hit=st.heliY<0||st.heliY+HELI_H>GH;
+      if(!hit) for(const p of st.pipes)
+        if(hx+hw>p.x+4&&hx<p.x+PIPE_W-4&&(hy<p.topH||hy+hh>p.bottomY)){hit=true;break;}
+
+      if(hit){
+        spawnBoom(HELI_X+HELI_W/2,st.heliY+HELI_H/2);
+        st.alive=false; st.dead=true; st.flashTimer=1;
+        if(st.score>st.bestScore) st.bestScore=st.score;
+      }
+      st.thrust.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.life-=.07;});
+      st.thrust=st.thrust.filter(p=>p.life>0);
+    }
+
+    if(st.boom.length){
+      st.boom.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=.18;p.life-=.025;});
+      st.boom=st.boom.filter(p=>p.life>0);
+    }
+    if(st.flashTimer>0) st.flashTimer-=.08;
+
+    drawBg();
+    drawParticles(st.thrust,false);
+    drawPipes();
+    if(st.alive) drawHeli(HELI_X,st.heliY,st.rotorAngle);
+    drawParticles(st.boom,true);
+    if(st.flashTimer>0){
+      ctx.fillStyle=`rgba(255,50,50,${st.flashTimer*.35})`;
+      ctx.fillRect(0,0,GW,GH);
+    }
+    drawHUD();
+    if(st.dead) drawDead();
+
+    requestAnimationFrame(loop);
+  }
+
+  // Register service worker for offline / PWA install
+  if("serviceWorker" in navigator){
+    navigator.serviceWorker.register("sw.js");
+  }
+
+  requestAnimationFrame(loop);
+</script>
+</body>
+</html>
