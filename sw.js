@@ -1,5 +1,5 @@
-const CACHE = "heli-run-v2";
-const ASSETS = ["/heli-run/", "/heli-run/index.html", "/heli-run/manifest.json", "/heli-run/icons/icon-192.png", "/heli-run/icons/icon-512.png", "/heli-run/icons/apple-touch-icon.png"];
+const CACHE = "heli-run-v3";
+const ASSETS = ["/Heli-run/", "/Heli-run/index.html", "/Heli-run/manifest.json", "/Heli-run/icons/icon-192.png", "/Heli-run/icons/icon-512.png", "/Heli-run/icons/apple-touch-icon.png"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
